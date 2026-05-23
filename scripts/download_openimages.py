@@ -95,43 +95,62 @@ def download_via_fiftyone(
 
     bbox_annotations = {}
     text_annotations = {}
+    copied = 0
+    skipped = 0
 
-    for sample in dataset:
-        img_id  = Path(sample.filepath).stem
-        src     = sample.filepath
-        dst     = images_dir / f"{img_id}.jpg"
+    logger.info(f"Mengexport {len(dataset)} gambar dan annotations ke {images_dir}...")
 
-        # Copy gambar
+    for i, sample in enumerate(dataset):
+        if i % 500 == 0:
+            logger.info(f"  Progress: {i}/{len(dataset)} ({copied} copied, {skipped} skipped)")
+
+        img_id = Path(sample.filepath).stem
+        src    = sample.filepath
+        dst    = images_dir / f"{img_id}.jpg"
+
+        # Copy gambar (skip kalau sudah ada)
         if not dst.exists():
-            shutil.copy2(src, dst)
+            try:
+                shutil.copy2(src, dst)
+                copied += 1
+            except Exception as e:
+                logger.warning(f"  ⚠ Gagal copy {img_id}: {e}")
+                skipped += 1
+                continue
 
-        # Ambil bbox
+        # Ambil bbox — FiftyOne menyimpan dalam format normalized [x, y, w, h] (sudah 0-1)
+        # TIDAK perlu W, H — langsung convert ke (XMin, YMin, XMax, YMax)
         bboxes = []
+        label  = "an object"
         if sample.ground_truth and sample.ground_truth.detections:
-            W, H = sample.metadata.width, sample.metadata.height
             for det in sample.ground_truth.detections:
-                x, y, w, h = det.bounding_box  # [0,1] format
-                bboxes.append((x, y, x + w, y + h))
+                x, y, w, h = det.bounding_box   # semua sudah normalized [0,1]
+                x1, y1 = max(0.0, x), max(0.0, y)
+                x2, y2 = min(1.0, x + w), min(1.0, y + h)
+                if x2 > x1 and y2 > y1:         # pastikan bbox valid
+                    bboxes.append((x1, y1, x2, y2))
+            label = sample.ground_truth.detections[0].label
 
         if bboxes:
             bbox_annotations[img_id] = bboxes
-            text_annotations[img_id] = sample.ground_truth.detections[0].label \
-                if sample.ground_truth and sample.ground_truth.detections else "an object"
+            text_annotations[img_id] = label
 
     # Simpan annotations
     bbox_file = ann_dir / f"{split}_bbox_annotations.json"
-    text_file = ann_dir / "text_annotations.json"
+    text_file  = ann_dir / "text_annotations.json"
 
     with open(bbox_file, "w") as f:
         json.dump(bbox_annotations, f)
     with open(text_file, "w") as f:
         json.dump(text_annotations, f)
 
-    logger.info(f"✅ Download selesai!")
-    logger.info(f"   Gambar      : {len(list(images_dir.glob('*.jpg')))} file")
-    logger.info(f"   BBox ann    : {bbox_file}")
-    logger.info(f"   Text ann    : {text_file}")
+    logger.info(f"✅ Export selesai!")
+    logger.info(f"   Gambar di-copy  : {copied}")
+    logger.info(f"   Gambar di-skip  : {skipped} (sudah ada)")
+    logger.info(f"   BBox annotations: {len(bbox_annotations)} gambar → {bbox_file}")
+    logger.info(f"   Text annotations: {len(text_annotations)} gambar → {text_file}")
     return True
+
 
 
 def download_via_csv(
