@@ -50,39 +50,19 @@ cd ~/HybridEditDif
 
 ## STEP 3 — Buat Conda Environment
 
-```bash
-# Buat environment baru dengan Python 3.10
-conda create -n hybridedif python=3.10 -y
+conda deactivate
+conda env remove -n hybridedif -y
 
-# Aktifkan environment
+conda create -n hybridedif python=3.10 -y
 conda activate hybridedif
 
-# Verifikasi Python
-python --version   # harus Python 3.10.x
-```
+# Install PyTorch via pip (bukan conda) — hindari konflik MKL conda
+pip install torch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0 \
+    --index-url https://download.pytorch.org/whl/cu121
 
----
+# Test
+python -c "import torch; print('CUDA:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0))"
 
-## STEP 4 — Install PyTorch dengan CUDA
-
-> ⚠️ Sesuaikan versi CUDA dengan output `nvidia-smi` kamu!
-
-```bash
-# Cek versi CUDA driver dulu
-nvidia-smi
-```
-
-**Untuk CUDA 12.1 (GPU modern — RTX 30xx/40xx, A100):**
-```bash
-conda install pytorch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0 \
-    pytorch-cuda=12.1 -c pytorch -c nvidia -y
-```
-
-**Untuk CUDA 11.8:**
-```bash
-conda install pytorch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0 \
-    pytorch-cuda=11.8 -c pytorch -c nvidia -y
-```
 
 **Verifikasi CUDA bisa dideteksi:**
 ```bash
