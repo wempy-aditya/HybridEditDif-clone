@@ -1,0 +1,50 @@
+# HybridEditDif - Reconstructed Implementation
+# Core Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# Diffusers ecosystem
+diffusers==0.27.2
+transformers==4.38.2
+accelerate==0.27.2
+safetensors>=0.4.2
+
+# CLIP / Vision encoders
+open_clip_torch>=2.24.0
+
+# Image processing
+Pillow>=10.0.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+scipy>=1.11.0
+
+# Dataset & data loading
+datasets>=2.18.0
+pandas>=2.0.0
+tqdm>=4.66.0
+pycocotools>=2.0.7
+
+# Metrics
+lpips>=0.1.4
+pytorch-fid>=0.3.0
+torch-fidelity>=0.3.0
+scikit-image>=0.21.0
+clip @ git+https://github.com/openai/CLIP.git
+
+# Training utilities
+wandb>=0.16.0
+tensorboard>=2.14.0
+einops>=0.7.0
+xformers>=0.0.24
+
+# Evaluation
+nima @ git+https://github.com/yunxiaoshi/neural-image-assessment.git
+clean-fid>=0.1.35
+
+# Utilities
+omegaconf>=2.3.0
+hydra-core>=1.3.0
+pyyaml>=6.0
+requests>=2.31.0
+huggingface-hub>=0.21.0
