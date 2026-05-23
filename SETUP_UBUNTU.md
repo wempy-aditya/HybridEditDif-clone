@@ -1,9 +1,18 @@
 # 🚀 Setup HybridEditDif di Ubuntu + Conda
 
-## Prasyarat
-- Ubuntu 20.04 / 22.04 LTS
-- GPU NVIDIA dengan VRAM ≥ 16 GB (disarankan V100/A100/RTX 3090+)
-- Driver NVIDIA sudah terinstall (`nvidia-smi` bisa jalan)
+## Spesifikasi Device (if24-desktop)
+
+| Komponen | Detail |
+|---|---|
+| OS | Ubuntu 22.04 LTS |
+| GPU 0 | NVIDIA GeForce RTX 4080 — 16 GB VRAM (sm_89) |
+| GPU 1 | NVIDIA RTX PRO 4000 Blackwell — 24 GB VRAM (sm_120) |
+| CUDA Driver | 13.1 (Driver 590.48.01) |
+| Python | 3.10 (via Conda) |
+| Conda Env | `hybridedif` |
+
+> ⚠️ **RTX PRO 4000 Blackwell (sm_120)** membutuhkan **PyTorch ≥ 2.7** dengan **CUDA 12.8+**.
+> PyTorch < 2.7 hanya bisa pakai RTX 4080 (sm_89).
 
 ---
 
@@ -30,52 +39,71 @@ conda --version
 
 **Opsi A — Clone dari GitHub:**
 ```bash
-git clone <URL_REPO_KAMU> ~/HybridEditDif
-cd ~/HybridEditDif
+git clone <URL_REPO_KAMU> ~/code/HybridEditDif-clone
+cd ~/code/HybridEditDif-clone
 ```
 
 **Opsi B — Transfer dari Windows via SCP:**
 ```bash
 # Jalankan dari PowerShell Windows
-scp -r "D:\Documents\TUGAS KULIAH\PROJECT-BATIK\HybridEditDif" user@<IP_SERVER>:~/HybridEditDif
-```
-
-**Opsi C — Via USB / shared folder:**
-```bash
-cp -r /path/ke/HybridEditDif ~/HybridEditDif
-cd ~/HybridEditDif
+scp -r "D:\Documents\TUGAS KULIAH\PROJECT-BATIK\HybridEditDif" if24@<IP>:~/code/HybridEditDif-clone
 ```
 
 ---
 
 ## STEP 3 — Buat Conda Environment
 
+```bash
+# Hapus env lama kalau ada
 conda deactivate
 conda env remove -n hybridedif -y
 
+# Buat environment baru dengan Python 3.10
 conda create -n hybridedif python=3.10 -y
 conda activate hybridedif
-
-# Install PyTorch via pip (bukan conda) — hindari konflik MKL conda
-pip install torch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0 \
-    --index-url https://download.pytorch.org/whl/cu121
-
-# Test
-python -c "import torch; print('CUDA:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0))"
-
-
-**Verifikasi CUDA bisa dideteksi:**
-```bash
-python -c "import torch; print('CUDA:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0))"
 ```
-Output yang diharapkan: `CUDA: True` dan nama GPU kamu.
+
+---
+
+## STEP 4 — Install PyTorch 2.7 (Support Dual GPU + Blackwell)
+
+> ✅ **Wajib install via `pip`**, bukan `conda install pytorch` — karena conda PyTorch
+> menyebabkan konflik MKL (`iJIT_NotifyEvent` error) di setup ini.
+
+```bash
+conda activate hybridedif
+
+# PyTorch 2.7 + CUDA 12.8 — support RTX 4080 (sm_89) DAN RTX PRO 4000 Blackwell (sm_120)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+```
+
+**Verifikasi kedua GPU terdeteksi:**
+```bash
+python -c "
+import torch
+print('PyTorch :', torch.__version__)
+print('CUDA    :', torch.cuda.is_available())
+print('GPUs    :', torch.cuda.device_count())
+for i in range(torch.cuda.device_count()):
+    p = torch.cuda.get_device_properties(i)
+    print(f'  GPU {i}: {p.name} — {p.total_memory // 1024**3} GB — sm_{p.major}{p.minor}')
+"
+```
+
+Output yang diharapkan:
+```
+PyTorch : 2.7.x+cu128
+CUDA    : True
+GPUs    : 2
+  GPU 0: NVIDIA GeForce RTX 4080 — 16 GB — sm_89
+  GPU 1: NVIDIA RTX PRO 4000 Blackwell — 24 GB — sm_120
+```
 
 ---
 
 ## STEP 5 — Install System Dependencies
 
 ```bash
-# Library sistem yang dibutuhkan OpenCV dan pycocotools
 sudo apt update
 sudo apt install -y \
     build-essential \
@@ -95,11 +123,14 @@ sudo apt install -y \
 ## STEP 6 — Install Python Dependencies
 
 ```bash
-# Pastikan environment aktif
 conda activate hybridedif
 
-# Upgrade pip dulu
+# Upgrade pip
 pip install --upgrade pip
+
+# ── PENTING: Pin NumPy < 2 ────────────────────────────────────────────────────
+# PyTorch 2.7 masih butuh NumPy 1.x (NumPy 2.x menyebabkan warning/error)
+pip install "numpy<2"
 
 # ── Core diffusers ecosystem ──────────────────────────────────────────────────
 pip install \
@@ -115,7 +146,6 @@ pip install "open_clip_torch>=2.24.0"
 pip install \
     "Pillow>=10.0.0" \
     "opencv-python>=4.8.0" \
-    "numpy>=1.24.0" \
     "scipy>=1.11.0"
 
 # ── Dataset & data loading ────────────────────────────────────────────────────
@@ -143,7 +173,7 @@ pip install \
     "einops>=0.7.0"
 
 # ── xformers (opsional, mempercepat attention) ────────────────────────────────
-pip install "xformers>=0.0.24" || echo "⚠ xformers skip — pakai attention standar"
+pip install xformers || echo "⚠ xformers skip — pakai attention standar"
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 pip install \
@@ -162,45 +192,56 @@ pip install git+https://github.com/yunxiaoshi/neural-image-assessment.git \
 
 ## STEP 7 — Setup Hugging Face Token
 
-Model Stable Diffusion v1.5 di-download otomatis dari HuggingFace saat pertama kali dijalankan.
-
 ```bash
 # Login via CLI
 huggingface-cli login
 # → Masukkan token dari: https://huggingface.co/settings/tokens
 
-# Atau via environment variable (lebih praktis di server)
+# Atau via environment variable
 echo 'export HF_TOKEN="hf_xxxxxxxxxxxxxxxxxxxx"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-> 📌 Buat token di: **https://huggingface.co/settings/tokens** (pilih tipe: Read)
+> 📌 Buat token di: **https://huggingface.co/settings/tokens** (tipe: Read)
 
 ---
 
-## STEP 8 — Setup Accelerate
+## STEP 8 — Setup Accelerate (Dual GPU)
 
 ```bash
-# Setup interaktif (direkomendasikan)
+# Setup interaktif
 accelerate config
 ```
 
-Jawab pertanyaannya:
+Jawab pertanyaannya untuk **dual GPU**:
 - `compute environment` → **This machine**
-- `multi-GPU` → **No** (single GPU) atau **Yes** (multi)
-- `num processes` → jumlah GPU kamu (1, 2, 4, dst.)
-- `mixed precision` → **fp16**
+- `multi-GPU` → **Yes**
+- `num processes` → **2** (untuk 2 GPU)
+- `mixed precision` → **bf16** (Blackwell support bf16 native)
 
-**Atau langsung buat config untuk single GPU:**
+**Atau buat config langsung untuk 2 GPU:**
 ```bash
 mkdir -p ~/.cache/huggingface/accelerate
 cat > ~/.cache/huggingface/accelerate/default_config.yaml << 'EOF'
 compute_environment: LOCAL_MACHINE
-distributed_type: 'NO'
+distributed_type: MULTI_GPU
 downcast_bf16: 'no'
-gpu_ids: all
+gpu_ids: 0,1
 machine_rank: 0
 main_training_function: main
+mixed_precision: bf16
+num_machines: 1
+num_processes: 2
+use_cpu: false
+EOF
+```
+
+**Untuk single GPU (RTX 4080 saja):**
+```bash
+cat > ~/.cache/huggingface/accelerate/default_config.yaml << 'EOF'
+compute_environment: LOCAL_MACHINE
+distributed_type: 'NO'
+gpu_ids: '0'
 mixed_precision: fp16
 num_machines: 1
 num_processes: 1
@@ -213,7 +254,7 @@ EOF
 ## STEP 9 — Buat Config Training
 
 ```bash
-cd ~/HybridEditDif
+cd ~/code/HybridEditDif-clone
 
 cat > configs/train_config.yaml << 'EOF'
 model:
@@ -232,11 +273,13 @@ data:
 
 training:
   num_epochs: 30
-  train_batch_size: 4     # Kurangi ke 2 kalau VRAM < 24GB
+  # RTX 4080 (16GB): batch 4 aman dengan fp16
+  # RTX PRO 4000 Blackwell (24GB): bisa batch 6-8
+  train_batch_size: 4
   learning_rate: 1.0e-4
   weight_decay: 1.0e-4
   gradient_accumulation_steps: 4
-  mixed_precision: "fp16"
+  mixed_precision: "bf16"   # bf16 lebih stabil di Blackwell
   warmup_steps: 500
   log_every: 50
   save_every: 2000
@@ -256,41 +299,67 @@ echo "✓ Config training dibuat!"
 ## STEP 10 — Verifikasi Semua Dependency
 
 ```bash
-cd ~/HybridEditDif
+cd ~/code/HybridEditDif-clone
 conda activate hybridedif
 
 python - << 'EOF'
-import torch, diffusers, transformers, open_clip, accelerate, lpips, omegaconf, cv2
-print("=" * 50)
+import torch, numpy as np
+
+print("=" * 55)
 print(f"PyTorch      : {torch.__version__}")
-print(f"CUDA         : {torch.cuda.is_available()}", end=" ")
-print(f"— {torch.cuda.get_device_name(0)}" if torch.cuda.is_available() else "")
+print(f"NumPy        : {np.__version__}")
+print(f"CUDA         : {torch.cuda.is_available()}")
+print(f"GPU count    : {torch.cuda.device_count()}")
+for i in range(torch.cuda.device_count()):
+    p = torch.cuda.get_device_properties(i)
+    print(f"  GPU {i}: {p.name} — {p.total_memory // 1024**3}GB — sm_{p.major}{p.minor}")
+
+import diffusers, transformers, accelerate, open_clip, cv2, omegaconf
 print(f"Diffusers    : {diffusers.__version__}")
 print(f"Transformers : {transformers.__version__}")
 print(f"Accelerate   : {accelerate.__version__}")
 print(f"OpenCLIP     : {open_clip.__version__}")
 print(f"OpenCV       : {cv2.__version__}")
-print("=" * 50)
+print("=" * 55)
 print("✅ Semua dependency siap!")
 EOF
+```
+
+Output yang diharapkan:
+```
+=======================================================
+PyTorch      : 2.7.x+cu128
+NumPy        : 1.26.x
+CUDA         : True
+GPU count    : 2
+  GPU 0: NVIDIA GeForce RTX 4080 — 16GB — sm_89
+  GPU 1: NVIDIA RTX PRO 4000 Blackwell — 24GB — sm_120
+Diffusers    : 0.27.2
+...
+✅ Semua dependency siap!
 ```
 
 ---
 
 ## STEP 11 — Jalankan Training
 
-**Single GPU:**
+**Single GPU (RTX 4080):**
 ```bash
-cd ~/HybridEditDif
+cd ~/code/HybridEditDif-clone
 conda activate hybridedif
 
-python scripts/train.py --config configs/train_config.yaml
+CUDA_VISIBLE_DEVICES=0 python scripts/train.py --config configs/train_config.yaml
 ```
 
-**Multi-GPU (contoh 4 GPU):**
+**Dual GPU (RTX 4080 + RTX PRO 4000 Blackwell):**
 ```bash
-accelerate launch --num_processes 4 scripts/train.py \
+accelerate launch --num_processes 2 scripts/train.py \
     --config configs/train_config.yaml
+```
+
+**Pakai GPU Blackwell saja (24GB VRAM, batch lebih besar):**
+```bash
+CUDA_VISIBLE_DEVICES=1 python scripts/train.py --config configs/train_config.yaml
 ```
 
 **Monitor GPU real-time:**
@@ -303,7 +372,6 @@ watch -n 1 nvidia-smi
 ```bash
 tensorboard --logdir ./checkpoints/logs --port 6006
 # Buka browser: http://localhost:6006
-# (atau http://<IP_SERVER>:6006 dari laptop kamu)
 ```
 
 ---
@@ -311,7 +379,7 @@ tensorboard --logdir ./checkpoints/logs --port 6006
 ## STEP 12 — Jalankan Evaluasi
 
 ```bash
-cd ~/HybridEditDif
+cd ~/code/HybridEditDif-clone
 conda activate hybridedif
 
 python scripts/evaluate.py \
@@ -330,19 +398,21 @@ python scripts/evaluate.py \
 
 | Error | Solusi |
 |---|---|
+| `iJIT_NotifyEvent` / MKL error | **Jangan** `conda install pytorch` — wajib via `pip install torch --index-url .../cu128` |
+| `NumPy 2.x` warning | `pip install "numpy<2"` |
+| RTX PRO 4000 Blackwell not supported | Install PyTorch 2.7+ via `--index-url .../cu128` |
 | `CUDA out of memory` | Kurangi `train_batch_size` ke 2, naikkan `gradient_accumulation_steps` ke 8 |
-| `xformers` install gagal | Abaikan saja, tidak wajib |
+| `xformers` install gagal | Abaikan, tidak wajib |
 | `pycocotools` build error | `sudo apt install python3-dev` lalu install ulang |
-| `ImportError: src.models` | Pastikan jalankan dari root folder `~/HybridEditDif/` |
-| SD model download lambat | Set `HF_TOKEN` dan gunakan `HF_HUB_OFFLINE=1` setelah download pertama |
-| `nvidia-smi` tidak ada | Install NVIDIA driver: `sudo ubuntu-drivers install` |
+| `ImportError: src.models` | Jalankan dari root: `cd ~/code/HybridEditDif-clone` |
+| SD model download lambat | `huggingface-cli login` lalu set `HF_HUB_OFFLINE=1` setelah download pertama |
 
 ---
 
-## 💾 Struktur Setelah Setup
+## 💾 Struktur Folder
 
 ```
-HybridEditDif/
+~/code/HybridEditDif-clone/
 ├── configs/
 │   └── train_config.yaml    ← ✅ Dibuat di Step 9
 ├── scripts/
