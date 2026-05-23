@@ -5,11 +5,12 @@
 | Komponen | Detail |
 |---|---|
 | OS | Ubuntu 22.04 LTS |
-| GPU 0 | NVIDIA GeForce RTX 4080 — 16 GB VRAM (sm_89) |
-| GPU 1 | NVIDIA RTX PRO 4000 Blackwell — 24 GB VRAM (sm_120) |
+| GPU 0 | NVIDIA GeForce RTX 4080 — 15 GB VRAM (sm_89) |
+| GPU 1 | NVIDIA RTX PRO 4000 Blackwell — 23 GB VRAM (sm_120) |
 | CUDA Driver | 13.1 (Driver 590.48.01) |
 | Python | 3.10 (via Conda) |
 | Conda Env | `hybridedif` |
+| PyTorch | 2.11.0+cu128 (terinstall aktual) |
 
 > ⚠️ **RTX PRO 4000 Blackwell (sm_120)** membutuhkan **PyTorch ≥ 2.7** dengan **CUDA 12.8+**.
 > PyTorch < 2.7 hanya bisa pakai RTX 4080 (sm_89).
@@ -65,15 +66,17 @@ conda activate hybridedif
 
 ---
 
-## STEP 4 — Install PyTorch 2.7 (Support Dual GPU + Blackwell)
+## STEP 4 — Install PyTorch (Support Dual GPU + Blackwell)
 
 > ✅ **Wajib install via `pip`**, bukan `conda install pytorch` — karena conda PyTorch
 > menyebabkan konflik MKL (`iJIT_NotifyEvent` error) di setup ini.
+>
+> Versi yang terinstall: **PyTorch 2.11.0+cu128** (latest dari index cu128)
 
 ```bash
 conda activate hybridedif
 
-# PyTorch 2.7 + CUDA 12.8 — support RTX 4080 (sm_89) DAN RTX PRO 4000 Blackwell (sm_120)
+# PyTorch latest + CUDA 12.8 — support RTX 4080 (sm_89) DAN RTX PRO 4000 Blackwell (sm_120)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 ```
 
@@ -128,15 +131,13 @@ conda activate hybridedif
 # Upgrade pip
 pip install --upgrade pip
 
-# ── PENTING: Pin NumPy < 2 ────────────────────────────────────────────────────
-# PyTorch 2.7 masih butuh NumPy 1.x (NumPy 2.x menyebabkan warning/error)
-pip install "numpy<2"
-
 # ── Core diffusers ecosystem ──────────────────────────────────────────────────
+# PENTING: diffusers>=0.30.0 agar kompatibel dengan huggingface_hub terbaru
+# (diffusers==0.27.2 menyebabkan: ImportError: cannot import 'cached_download')
 pip install \
-    "diffusers==0.27.2" \
-    "transformers==4.38.2" \
-    "accelerate==0.27.2" \
+    "diffusers>=0.30.0" \
+    "transformers>=4.40.0" \
+    "accelerate>=0.30.0" \
     "safetensors>=0.4.2"
 
 # ── CLIP / Vision encoders ────────────────────────────────────────────────────
@@ -146,7 +147,9 @@ pip install "open_clip_torch>=2.24.0"
 pip install \
     "Pillow>=10.0.0" \
     "opencv-python>=4.8.0" \
+    "numpy>=1.24.0" \
     "scipy>=1.11.0"
+# Catatan: NumPy 2.x kompatibel dengan PyTorch 2.11, tidak perlu pin <2
 
 # ── Dataset & data loading ────────────────────────────────────────────────────
 pip install \
@@ -328,14 +331,18 @@ EOF
 Output yang diharapkan:
 ```
 =======================================================
-PyTorch      : 2.7.x+cu128
-NumPy        : 1.26.x
+PyTorch      : 2.11.0+cu128
+NumPy        : 2.2.6
 CUDA         : True
 GPU count    : 2
-  GPU 0: NVIDIA GeForce RTX 4080 — 16GB — sm_89
-  GPU 1: NVIDIA RTX PRO 4000 Blackwell — 24GB — sm_120
-Diffusers    : 0.27.2
-...
+  GPU 0: NVIDIA GeForce RTX 4080 — 15GB — sm_89
+  GPU 1: NVIDIA RTX PRO 4000 Blackwell — 23GB — sm_120
+Diffusers    : 0.30.x
+Transformers : 4.40.x
+Accelerate   : 0.30.x
+OpenCLIP     : 2.24.x
+OpenCV       : 4.x.x
+=======================================================
 ✅ Semua dependency siap!
 ```
 
@@ -399,8 +406,8 @@ python scripts/evaluate.py \
 | Error | Solusi |
 |---|---|
 | `iJIT_NotifyEvent` / MKL error | **Jangan** `conda install pytorch` — wajib via `pip install torch --index-url .../cu128` |
-| `NumPy 2.x` warning | `pip install "numpy<2"` |
-| RTX PRO 4000 Blackwell not supported | Install PyTorch 2.7+ via `--index-url .../cu128` |
+| `cannot import 'cached_download'` | `pip install "diffusers>=0.30.0"` — diffusers lama tidak kompatibel dengan huggingface_hub baru |
+| RTX PRO 4000 Blackwell not supported | Install PyTorch via `--index-url https://download.pytorch.org/whl/cu128` |
 | `CUDA out of memory` | Kurangi `train_batch_size` ke 2, naikkan `gradient_accumulation_steps` ke 8 |
 | `xformers` install gagal | Abaikan, tidak wajib |
 | `pycocotools` build error | `sudo apt install python3-dev` lalu install ulang |
