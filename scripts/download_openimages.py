@@ -60,8 +60,8 @@ def download_via_fiftyone(
         logger.error("FiftyOne tidak terinstall. Jalankan: pip install fiftyone")
         return False
 
-    images_dir   = Path(data_root) / "images" / split
-    ann_dir      = Path(data_root) / "annotations"
+    images_dir = Path(data_root) / "images" / split
+    ann_dir    = Path(data_root) / "annotations"
     images_dir.mkdir(parents=True, exist_ok=True)
     ann_dir.mkdir(parents=True, exist_ok=True)
 
@@ -69,15 +69,25 @@ def download_via_fiftyone(
     logger.info(f"  Jumlah gambar : {n_samples if n_samples > 0 else 'ALL (~1.9M)'}")
     logger.info(f"  Destinasi     : {images_dir}")
 
+    # NOTE: Jangan pass 'dataset_dir' ke load_zoo_dataset() — konflik di FiftyOne baru
+    # FiftyOne menyimpan di ~/fiftyone/ secara default
     kwargs = {
         "split": split,
         "label_types": ["detections"],
-        "dataset_dir": str(Path(data_root) / "fiftyone_cache"),
     }
     if n_samples > 0:
         kwargs["max_samples"] = n_samples
 
-    dataset = foz.load_zoo_dataset("open-images-v7", **kwargs)
+    # Cek apakah dataset sudah ada di FiftyOne persistent store
+    dataset_name = f"open-images-v7-{split}-{n_samples}"
+    if fo.dataset_exists(dataset_name):
+        logger.info(f"Dataset '{dataset_name}' sudah ada di FiftyOne cache, loading...")
+        dataset = fo.load_dataset(dataset_name)
+    else:
+        dataset = foz.load_zoo_dataset("open-images-v7", **kwargs)
+        dataset.name = dataset_name
+        dataset.persistent = True
+        dataset.save()
 
     # Export ke format yang dibutuhkan openimages_dataset.py
     logger.info("Mengexport gambar dan annotations...")
