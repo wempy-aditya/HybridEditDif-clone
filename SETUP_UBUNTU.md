@@ -348,7 +348,105 @@ OpenCV       : 4.x.x
 
 ---
 
-## STEP 11 — Jalankan Training
+## STEP 11 — Download Dataset OpenImages V7
+
+Dataset yang dipakai paper: **OpenImages V7** — 1.9M gambar, 16M bounding box.
+Untuk training awal, cukup download **50.000 gambar** (~50GB).
+
+### Opsi A — Via FiftyOne (Paling Mudah ✅ Direkomendasikan)
+
+```bash
+conda activate hybridedif
+
+# Install FiftyOne
+pip install fiftyone
+
+# Jalankan script download (50k gambar, ~50GB, bisa makan waktu beberapa jam)
+cd ~/code/HybridEditDif-clone
+python scripts/download_openimages.py \
+    --data_root ./data/openimages \
+    --n_samples 50000 \
+    --split train
+```
+
+> ⏱ Estimasi waktu: **2–6 jam** tergantung koneksi internet.
+> 💾 Estimasi disk: **~50 GB** untuk 50k gambar.
+
+**Untuk testing cepat (1000 gambar saja):**
+```bash
+python scripts/download_openimages.py \
+    --data_root ./data/openimages \
+    --n_samples 1000 \
+    --split train
+```
+
+### Opsi B — Via AWS CLI (Lebih Cepat untuk Dataset Besar)
+
+```bash
+# Install AWS CLI
+sudo apt install awscli -y
+
+# Download images langsung dari S3 (no sign-in required)
+mkdir -p ./data/openimages/images/train
+
+# Download subset tertentu (ganti limit sesuai kebutuhan)
+aws s3 --no-sign-request sync \
+    s3://open-images-dataset/train \
+    ./data/openimages/images/train \
+    --quiet
+
+# Download annotations CSV
+python scripts/download_openimages.py \
+    --data_root ./data/openimages \
+    --method csv
+```
+
+### Verifikasi Dataset
+
+```bash
+python - << 'EOF'
+from pathlib import Path
+import json
+
+data_root = Path("./data/openimages")
+images_dir = data_root / "images" / "train"
+ann_dir    = data_root / "annotations"
+
+n_images = len(list(images_dir.glob("*.jpg"))) if images_dir.exists() else 0
+print(f"✓ Gambar tersedia : {n_images:,}")
+
+bbox_file = ann_dir / "train_bbox_annotations.json"
+if bbox_file.exists():
+    with open(bbox_file) as f:
+        bboxes = json.load(f)
+    print(f"✓ BBox annotations: {len(bboxes):,} gambar")
+else:
+    print("⚠ BBox annotations belum ada")
+
+text_file = ann_dir / "text_annotations.json"
+if text_file.exists():
+    with open(text_file) as f:
+        texts = json.load(f)
+    print(f"✓ Text annotations: {len(texts):,} gambar")
+else:
+    print("⚠ Text annotations belum ada (opsional)")
+EOF
+```
+
+### Update Config Training Sesuai Dataset
+
+```bash
+# Sesuaikan data_root dan max_images di config
+# Kalau download 50k gambar, set max_images: 50000
+sed -i 's/max_images: 200000/max_images: 50000/' configs/train_config.yaml
+
+# Verifikasi
+grep max_images configs/train_config.yaml
+```
+
+---
+
+## STEP 12 — Jalankan Training
 
 **Single GPU (RTX 4080):**
 ```bash
