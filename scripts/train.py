@@ -85,6 +85,13 @@ def training_step(
     """
     device = accelerator.device
 
+    # ── Unwrap DDP wrapper ────────────────────────────────────────────────────
+    # accelerator.prepare() membungkus model dengan DistributedDataParallel.
+    # Custom methods (encode_image_to_latent, dll) tidak bisa diakses langsung
+    # dari DDP wrapper — harus lewat unwrap_model() untuk akses atribut.
+    # Forward pass tetap pakai `model` (DDP) agar gradient sync benar.
+    m = accelerator.unwrap_model(model)
+
     source        = batch["source"].to(device, dtype=weight_dtype)        # [B,3,H,W]
     masked_source = batch["masked_source"].to(device, dtype=weight_dtype) # [B,3,H,W]
     reference     = batch["reference"].to(device, dtype=weight_dtype)     # [B,3,224,224]
@@ -97,43 +104,36 @@ def training_step(
 
     # ── Step 1-2: VAE encode ──────────────────────────────────────────────────
     with torch.no_grad():
-        # Encode ground truth image (target)
-        latents = model.encode_image_to_latent(source)            # [B,4,h,w]
-
-        # Encode masked source
-        masked_latents = model.encode_image_to_latent(masked_source)  # [B,4,h,w]
-
-        # Downsample mask to latent size
+        latents        = m.encode_image_to_latent(source)         # [B,4,h,w]
+        masked_latents = m.encode_image_to_latent(masked_source)  # [B,4,h,w]
         h, w = latents.shape[2], latents.shape[3]
         mask_latent = F.interpolate(mask, size=(h, w), mode='nearest')  # [B,1,h,w]
 
     # ── Step 3: Add noise ─────────────────────────────────────────────────────
-    noise = torch.randn_like(latents)
+    noise     = torch.randn_like(latents)
     timesteps = torch.randint(
-        0, model.noise_scheduler.config.num_train_timesteps,
+        0, m.noise_scheduler.config.num_train_timesteps,
         (B,), device=device
     ).long()
-    noisy_latents = model.noise_scheduler.add_noise(latents, noise, timesteps)
+    noisy_latents = m.noise_scheduler.add_noise(latents, noise, timesteps)
 
     # ── Step 4: Image conditioning c_i (Eq. 6) ───────────────────────────────
     with torch.no_grad():
-        image_context = model.image_encoder(reference)  # [B, 257, 1024]
+        image_context = m.image_encoder(reference)      # [B, 257, 1024]
 
     # ── Step 5: Text conditioning c_t (Eq. 7) ────────────────────────────────
     with torch.no_grad():
-        text_context = model.clip_text_encoder(text_tokens)  # [B, 1, 1024]
+        text_context = m.clip_text_encoder(text_tokens) # [B, 1, 1024]
 
     # ── Step 6: SD text embeddings (frozen SD cross-attn) ────────────────────
     with torch.no_grad():
-        sd_text_emb = model.text_encoder(text_tokens)[0]  # [B, seq, 768]
+        sd_text_emb = m.text_encoder(text_tokens)[0]    # [B, seq, 768]
 
-    # ── Step 7-8: Forward + predict noise (Eq. 11) ───────────────────────────
-    # Handle per-sample dropout (classifier-free guidance)
-    # Batch-level: apply if majority in batch has drop=True
+    # ── Step 7-8: Forward pass via DDP wrapper (gradient sync) ───────────────
     batch_drop_image = any(drop_image)
     batch_drop_text  = any(drop_text)
 
-    noise_pred = model(
+    noise_pred = model(  # pakai `model` (DDP), bukan `m`
         noisy_latents=noisy_latents,
         masked_image_latents=masked_latents,
         mask_latents=mask_latent,
@@ -146,15 +146,15 @@ def training_step(
     )
 
     # ── Step 9: Loss ──────────────────────────────────────────────────────────
-    # Determine prediction target
-    if model.noise_scheduler.config.prediction_type == "epsilon":
+    pred_type = m.noise_scheduler.config.prediction_type
+    if pred_type == "epsilon":
         target = noise
-    elif model.noise_scheduler.config.prediction_type == "v_prediction":
-        target = model.noise_scheduler.get_velocity(latents, noise, timesteps)
+    elif pred_type == "v_prediction":
+        target = m.noise_scheduler.get_velocity(latents, noise, timesteps)
     else:
-        raise ValueError(f"Unknown prediction_type: {model.noise_scheduler.config.prediction_type}")
+        raise ValueError(f"Unknown prediction_type: {pred_type}")
 
-    # Masked loss: only on inpainted region (mask_latent = 1 where changed)
+    # Masked loss: only on inpainted region
     loss = F.mse_loss(
         noise_pred.float() * mask_latent,
         target.float()     * mask_latent,
@@ -184,7 +184,11 @@ def train(config_path: str):
     )
 
     set_seed(config.training.get("seed", 42))
-    weight_dtype = torch.float16 if accelerator.mixed_precision == "fp16" else torch.float32
+    # Tentukan dtype sesuai mixed_precision config (fp16 / bf16 / no)
+    weight_dtype = {
+        "fp16": torch.float16,
+        "bf16": torch.bfloat16,
+    }.get(accelerator.mixed_precision, torch.float32)
 
     if accelerator.is_main_process:
         os.makedirs(config.output_dir, exist_ok=True)
@@ -208,18 +212,36 @@ def train(config_path: str):
     if accelerator.is_main_process:
         logger.info("Loading dataset...")
 
-    downloader = OpenImagesDownloader(config.data.data_root)
-    bbox_annotations = downloader.load_bbox_annotations(
-        split="train",
-        max_images=config.data.get("max_images", 200000),
-    )
+    import json
+
+    # Cek apakah ada JSON annotations dari scripts/download_openimages.py
+    # JSON lebih cepat dimuat dan sudah berformat yang benar
+    json_bbox_path = Path(config.data.data_root) / "annotations" / "train_bbox_annotations.json"
+
+    if json_bbox_path.exists():
+        logger.info(f"Loading bbox annotations from JSON: {json_bbox_path}")
+        with open(json_bbox_path) as f:
+            raw = json.load(f)
+        # JSON menyimpan list-of-list, konversi ke list-of-tuple
+        bbox_annotations = {
+            img_id: [tuple(b) for b in bboxes]
+            for img_id, bboxes in raw.items()
+        }
+        logger.info(f"Loaded {len(bbox_annotations):,} images with bbox annotations")
+    else:
+        # Fallback: download annotations CSV dari OpenImages (bisa lama, file ~5GB)
+        logger.info("JSON annotations tidak ditemukan, fallback ke CSV downloader...")
+        downloader = OpenImagesDownloader(config.data.data_root)
+        bbox_annotations = downloader.load_bbox_annotations(
+            split="train",
+            max_images=config.data.get("max_images", 200000),
+        )
 
     # Load text annotations if available
     text_annotations = None
     text_ann_path = Path(config.data.data_root) / "annotations" / "text_annotations.json"
     if text_ann_path.exists():
         with open(text_ann_path) as f:
-            import json
             text_annotations = json.load(f)
 
     train_loader, val_loader = get_dataloaders(
