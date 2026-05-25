@@ -279,9 +279,16 @@ def train(config_path: str):
         model, optimizer, train_loader, val_loader, lr_scheduler
     )
 
-    # Move frozen components to device + dtype
+    # ── Cast semua frozen components ke weight_dtype ──────────────────────────
+    # Setelah accelerator.prepare(), semua component harus dtype yang sama dengan
+    # input tensor (weight_dtype). Frozen encoders di-cast ke bf16/fp16 agar
+    # tidak ada RuntimeError: "Input type != weight type".
     device = accelerator.device
-    model.module.vae.to(device, dtype=weight_dtype) if hasattr(model, 'module') else model.vae.to(device, dtype=weight_dtype)
+    frozen = accelerator.unwrap_model(model)
+    frozen.vae.to(device, dtype=weight_dtype)
+    frozen.image_encoder.to(device, dtype=weight_dtype)       # CLIP image encoder
+    frozen.clip_text_encoder.to(device, dtype=weight_dtype)   # CLIP text encoder
+    frozen.text_encoder.to(device, dtype=weight_dtype)        # SD text encoder (CLIP ViT-L)
 
     # ── Resume from checkpoint ────────────────────────────────────────────────
     start_epoch = 0
