@@ -191,6 +191,12 @@ class HybridEditDif(nn.Module):
         logger.info("Injecting 16 DDCA layers into UNet...")
         self._inject_ddca(image_context_dim, text_context_dim)
 
+        # ── Expand UNet conv_in: 4 → 9 channels (inpainting format) ──────────
+        # Paper: UNet input = [z_t (4ch) | masked_z_s (4ch) | mask (1ch)] = 9ch
+        # Standard SD1.5 conv_in expects 4ch → must be expanded.
+        # New channels initialized to 0 → training starts as identity on z_t.
+        self._expand_unet_conv_in(in_channels=9)
+
         logger.info("HybridEditDif initialized.")
         self._log_trainable_params()
 
@@ -240,6 +246,48 @@ class HybridEditDif(nn.Module):
         total     = sum(p.numel() for p in self.parameters())
         logger.info(f"  Trainable: {trainable:,} / {total:,} params "
                     f"({100*trainable/total:.1f}%)")
+
+    def _expand_unet_conv_in(self, in_channels: int = 9):
+        """
+        Expand UNet conv_in from 4 → 9 channels for inpainting.
+
+        SD v1.5 UNet conv_in: Conv2d(4, 320, 3, padding=1)
+        After expansion:       Conv2d(9, 320, 3, padding=1)
+
+        Strategy (per SD-Inpainting paper):
+          - Copy original 4-ch weights as-is (preserves pretrained features)
+          - Initialize extra 5 channels (masked_latent + mask) with zeros
+          - This ensures at t=0, model behaves identically to SD base
+        """
+        old_conv = self.unet.conv_in
+        old_in   = old_conv.in_channels  # 4
+
+        if old_in == in_channels:
+            logger.info(f"  conv_in already has {in_channels} channels, skip.")
+            return
+
+        new_conv = nn.Conv2d(
+            in_channels,
+            old_conv.out_channels,
+            kernel_size=old_conv.kernel_size,
+            stride=old_conv.stride,
+            padding=old_conv.padding,
+        )
+
+        with torch.no_grad():
+            # Copy pretrained weights for first `old_in` channels
+            new_conv.weight[:, :old_in] = old_conv.weight
+            # Zero-init new channels (masked latent + mask)
+            new_conv.weight[:, old_in:] = 0.0
+            # Copy bias unchanged
+            if old_conv.bias is not None:
+                new_conv.bias.copy_(old_conv.bias)
+
+        self.unet.conv_in = new_conv
+        # Update config so UNet knows its new input size
+        self.unet.config.in_channels = in_channels
+        logger.info(f"  ✓ UNet conv_in expanded: {old_in}ch → {in_channels}ch "
+                    f"(zero-init for extra {in_channels - old_in} channels)")
 
     def encode_image(self, image: torch.Tensor) -> torch.Tensor:
         """Encode reference image to conditioning tokens c_i (Eq. 6)."""

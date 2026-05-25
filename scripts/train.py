@@ -290,6 +290,15 @@ def train(config_path: str):
     frozen.clip_text_encoder.to(device, dtype=weight_dtype)   # CLIP text encoder
     frozen.text_encoder.to(device, dtype=weight_dtype)        # SD text encoder (CLIP ViT-L)
 
+    # ── Gradient Checkpointing (hemat VRAM ~40%) ──────────────────────────────
+    # Menukar aktivasi dengan recompute saat backward — lebih lambat tapi hemat memori.
+    # Kritis untuk model 3B+ parameter di GPU < 24GB.
+    if hasattr(frozen.unet, "enable_gradient_checkpointing"):
+        frozen.unet.enable_gradient_checkpointing()
+        if accelerator.is_main_process:
+            logger.info("✓ Gradient checkpointing enabled untuk UNet")
+
+
     # ── Resume from checkpoint ────────────────────────────────────────────────
     start_epoch = 0
     global_step = 0
