@@ -393,19 +393,24 @@ def train(config_path: str):
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
         final_path = Path(config.output_dir) / "final_model"
+        final_path.mkdir(parents=True, exist_ok=True)  # ← buat folder dulu!
+
         unwrapped = accelerator.unwrap_model(model)
-        # Save DDCA weights + MLP heads (trainable parts only)
+
+        # Save DDCA weights + MLP heads + conv_in expansion (semua trainable + modified)
         torch.save(
             {
-                "ddca_layers": unwrapped.ddca_layers.state_dict(),
-                "image_encoder_mlp": unwrapped.image_encoder.mlp.state_dict(),
+                "ddca_layers":           unwrapped.ddca_layers.state_dict(),
+                "image_encoder_mlp":     unwrapped.image_encoder.mlp.state_dict(),
                 "clip_text_encoder_mlp": unwrapped.clip_text_encoder.mlp.state_dict(),
-                "config": OmegaConf.to_container(config),
+                "unet_conv_in":          unwrapped.unet.conv_in.state_dict(),
+                "config":                OmegaConf.to_container(config),
             },
             final_path / "hybrid_edit_dif_weights.pt"
         )
-        logger.info(f"Training complete! Model saved to: {final_path}")
-        logger.info("Run evaluate.py for COCOEE/MagicBrush/EmuEdit benchmarks.")
+        logger.info(f"✅ Training complete! Model saved to: {final_path}/hybrid_edit_dif_weights.pt")
+        logger.info("   Run evaluate.py for COCOEE/MagicBrush/EmuEdit benchmarks.")
+
 
 
 if __name__ == "__main__":
