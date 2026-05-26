@@ -52,18 +52,104 @@ class COCOEELoader:
     """
     COCOEE dataset loader.
     Source: Yang et al., Paint by Example (CVPR 2023)
-    Format: original images + bounding box masks + reference patches
+
+    Mendukung dua format:
+    A) Format asli (hasil download dari repo):
+       data/cocoee/test_bench/
+         ├── GT_3500/      ← source images
+         ├── Ref_3500/     ← reference images
+         └── Mask_bbox_3500/ ← masks
+
+    B) Format dengan annotations.json:
+       data/cocoee/
+         ├── annotations.json
+         ├── images/
+         ├── references/
+         └── masks/
     """
 
     def __init__(self, data_root: str):
         self.data_root = Path(data_root)
 
-    def load(self, max_samples: Optional[int] = None) -> List[Dict]:
-        """Load COCOEE test samples."""
+    def _find_dirs(self):
+        """Temukan folder GT, Ref, dan Mask secara otomatis."""
+        # Format A: test_bench/ langsung
+        test_bench = self.data_root / "test_bench"
+        if test_bench.exists():
+            gt_dirs   = sorted(test_bench.glob("GT_*"))
+            ref_dirs  = sorted(test_bench.glob("Ref_*"))
+            mask_dirs = sorted(test_bench.glob("Mask_*"))
+            if gt_dirs:
+                return gt_dirs[0], ref_dirs[0] if ref_dirs else None, mask_dirs[0] if mask_dirs else None
+
+        # Format B: root langsung
+        gt_dirs   = sorted(self.data_root.glob("GT_*"))
+        ref_dirs  = sorted(self.data_root.glob("Ref_*"))
+        mask_dirs = sorted(self.data_root.glob("Mask_*"))
+        if gt_dirs:
+            return gt_dirs[0], ref_dirs[0] if ref_dirs else None, mask_dirs[0] if mask_dirs else None
+
+        return None, None, None
+
+    def load(self, max_samples=None):
+        """Load COCOEE test samples dari berbagai format."""
+
+        # ── Coba format langsung (GT_xxx / Ref_xxx / Mask_xxx) ────────────────
+        gt_dir, ref_dir, mask_dir = self._find_dirs()
+
+        if gt_dir and gt_dir.exists():
+            logger.info(f"COCOEE: loading dari folder langsung → {gt_dir}")
+            gt_files = sorted(
+                [f for f in gt_dir.iterdir() if f.suffix.lower() in (".jpg", ".jpeg", ".png")]
+            )
+            if max_samples:
+                gt_files = gt_files[:max_samples]
+
+            samples = []
+            for gt_path in gt_files:
+                stem = gt_path.stem
+                sample = {
+                    "source": Image.open(gt_path).convert("RGB"),
+                    "text":   "replace the object with a similar one",
+                }
+
+                # Cari reference image (nama file sama)
+                if ref_dir:
+                    for ext in (".jpg", ".jpeg", ".png"):
+                        rp = ref_dir / (stem + ext)
+                        if rp.exists():
+                            sample["reference"] = Image.open(rp).convert("RGB")
+                            break
+
+                # Cari mask image (nama file sama)
+                if mask_dir:
+                    for ext in (".jpg", ".jpeg", ".png"):
+                        mp = mask_dir / (stem + ext)
+                        if mp.exists():
+                            sample["mask"] = Image.open(mp).convert("L")
+                            break
+
+                # Fallback mask: kotak tengah
+                if "mask" not in sample:
+                    src  = sample["source"]
+                    mask = Image.new("L", src.size, 0)
+                    from PIL import ImageDraw
+                    W, H = src.size
+                    draw = ImageDraw.Draw(mask)
+                    draw.rectangle([W//4, H//4, 3*W//4, 3*H//4], fill=255)
+                    sample["mask"] = mask
+
+                samples.append(sample)
+
+            logger.info(f"COCOEE: loaded {len(samples)} samples dari {gt_dir}")
+            return samples
+
+        # ── Fallback: format annotations.json ─────────────────────────────────
         ann_file = self.data_root / "annotations.json"
         if not ann_file.exists():
-            logger.warning(f"COCOEE annotations not found at {ann_file}")
-            logger.warning("Download: https://github.com/Fantasy-Studio/Paint-by-Example")
+            logger.warning(f"COCOEE: tidak ditemukan GT folder maupun annotations.json")
+            logger.warning(f"  Dicari di: {self.data_root}")
+            logger.warning(f"  Pastikan dataset ada di path yang benar.")
             return []
 
         with open(ann_file) as f:
@@ -82,15 +168,12 @@ class COCOEELoader:
                 "source": Image.open(source_path).convert("RGB"),
                 "text":   ann.get("caption", "an object in the scene"),
             }
-
             if ref_path.exists():
                 sample["reference"] = Image.open(ref_path).convert("RGB")
-
             if mask_path.exists():
                 sample["mask"] = Image.open(mask_path).convert("L")
             else:
-                # Create mask from bounding box
-                src = sample["source"]
+                src  = sample["source"]
                 mask = Image.new("L", src.size, 0)
                 from PIL import ImageDraw
                 draw = ImageDraw.Draw(mask)
@@ -374,6 +457,8 @@ def main():
         model.ddca_layers.load_state_dict(ckpt["ddca_layers"])
         model.image_encoder.mlp.load_state_dict(ckpt["image_encoder_mlp"])
         model.clip_text_encoder.mlp.load_state_dict(ckpt["clip_text_encoder_mlp"])
+        if "unet_conv_in" in ckpt:
+            model.unet.conv_in.load_state_dict(ckpt["unet_conv_in"])
         logger.info(f"✓ Loaded weights from: {args.checkpoint}")
     else:
         logger.warning(f"Checkpoint not found: {args.checkpoint}. Using random weights.")
@@ -433,7 +518,8 @@ def main():
         logger.info(f"{'='*80}")
 
     # Save combined results
-    combined_file = Path(args.output_dir) / "all_results.json"
+    combined_file = Path(args.output_dir) / "evaluate" / "all_results.json"
+    combined_file.parent.mkdir(parents=True, exist_ok=True)  # ← buat folder dulu
     with open(combined_file, 'w') as f:
         json.dump(all_results, f, indent=2, default=str)
     logger.info(f"\nAll results saved to: {combined_file}")
