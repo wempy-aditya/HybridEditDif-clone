@@ -48,15 +48,22 @@ class FIDMetric:
         self,
         real_dir: str,
         generated_dir: str,
-        batch_size: int = 50,
+        batch_size: int = 32,
     ) -> float:
         try:
             from cleanfid import fid
+
+            # Force single-GPU via CUDA_VISIBLE_DEVICES agar tidak trigger
+            # DataParallel NCCL error ketika ada 2+ GPU dengan VRAM berbeda.
+            dev = torch.device(self.device)
+
             score = fid.compute_fid(
                 real_dir,
                 generated_dir,
                 batch_size=batch_size,
-                device=torch.device(self.device),
+                device=dev,
+                num_workers=0,      # ← cegah DataParallel multi-GPU
+                verbose=True,
             )
             return float(score)
         except ImportError:
@@ -68,11 +75,17 @@ class FIDMetric:
                     batch_size=batch_size,
                     device=self.device,
                     dims=2048,
+                    num_workers=0,
                 )
                 return float(score)
             except ImportError:
                 logger.error("Neither clean-fid nor pytorch-fid installed.")
                 return float('nan')
+        except Exception as e:
+            logger.error(f"FID computation failed: {e}")
+            logger.warning("Skipping FID — returning NaN")
+            return float('nan')
+
 
 
 class QualityScoreMetric:
