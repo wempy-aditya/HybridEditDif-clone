@@ -72,48 +72,64 @@ class COCOEELoader:
         self.data_root = Path(data_root)
 
     def _find_dirs(self):
-        """Temukan folder GT, Ref, dan Mask secara otomatis."""
-        # Format A: test_bench/ langsung
+        """Temukan folder GT, Ref, dan Mask secara otomatis dari berbagai format."""
+
+        # Format A: test_bench/ (GT_xxx / Ref_xxx / Mask_xxx)
         test_bench = self.data_root / "test_bench"
         if test_bench.exists():
             gt_dirs   = sorted(test_bench.glob("GT_*"))
             ref_dirs  = sorted(test_bench.glob("Ref_*"))
             mask_dirs = sorted(test_bench.glob("Mask_*"))
             if gt_dirs:
-                return gt_dirs[0], ref_dirs[0] if ref_dirs else None, mask_dirs[0] if mask_dirs else None
+                return ("triplet",
+                        gt_dirs[0],
+                        ref_dirs[0] if ref_dirs else None,
+                        mask_dirs[0] if mask_dirs else None)
 
-        # Format B: root langsung
+        # Format B: GT_xxx / Ref_xxx / Mask_xxx di root
         gt_dirs   = sorted(self.data_root.glob("GT_*"))
         ref_dirs  = sorted(self.data_root.glob("Ref_*"))
         mask_dirs = sorted(self.data_root.glob("Mask_*"))
         if gt_dirs:
-            return gt_dirs[0], ref_dirs[0] if ref_dirs else None, mask_dirs[0] if mask_dirs else None
+            return ("triplet",
+                    gt_dirs[0],
+                    ref_dirs[0] if ref_dirs else None,
+                    mask_dirs[0] if mask_dirs else None)
 
-        return None, None, None
+        # Format C: images/ + masks/ + references/ (Paint-by-Example standard)
+        img_dir  = self.data_root / "images"
+        mask_dir = self.data_root / "masks"
+        ref_dir  = self.data_root / "references"
+        if img_dir.exists():
+            return ("imd", img_dir,
+                    ref_dir if ref_dir.exists() else None,
+                    mask_dir if mask_dir.exists() else None)
+
+        return (None, None, None, None)
 
     def load(self, max_samples=None):
         """Load COCOEE test samples dari berbagai format."""
 
-        # ── Coba format langsung (GT_xxx / Ref_xxx / Mask_xxx) ────────────────
-        gt_dir, ref_dir, mask_dir = self._find_dirs()
+        fmt, gt_dir, ref_dir, mask_dir = self._find_dirs()
 
-        if gt_dir and gt_dir.exists():
-            logger.info(f"COCOEE: loading dari folder langsung → {gt_dir}")
-            gt_files = sorted(
-                [f for f in gt_dir.iterdir() if f.suffix.lower() in (".jpg", ".jpeg", ".png")]
+        if fmt in ("triplet", "imd") and gt_dir and gt_dir.exists():
+            logger.info(f"COCOEE: loading dari {gt_dir} (format='{fmt}')")
+            img_files = sorted(
+                [f for f in gt_dir.iterdir()
+                 if f.suffix.lower() in (".jpg", ".jpeg", ".png")]
             )
             if max_samples:
-                gt_files = gt_files[:max_samples]
+                img_files = img_files[:max_samples]
 
             samples = []
-            for gt_path in gt_files:
-                stem = gt_path.stem
+            for img_path in img_files:
+                stem = img_path.stem
                 sample = {
-                    "source": Image.open(gt_path).convert("RGB"),
+                    "source": Image.open(img_path).convert("RGB"),
                     "text":   "replace the object with a similar one",
                 }
 
-                # Cari reference image (nama file sama)
+                # Reference image — cari nama file yang sama
                 if ref_dir:
                     for ext in (".jpg", ".jpeg", ".png"):
                         rp = ref_dir / (stem + ext)
@@ -121,7 +137,7 @@ class COCOEELoader:
                             sample["reference"] = Image.open(rp).convert("RGB")
                             break
 
-                # Cari mask image (nama file sama)
+                # Mask image — cari nama file yang sama
                 if mask_dir:
                     for ext in (".jpg", ".jpeg", ".png"):
                         mp = mask_dir / (stem + ext)
@@ -132,24 +148,26 @@ class COCOEELoader:
                 # Fallback mask: kotak tengah
                 if "mask" not in sample:
                     src  = sample["source"]
+                    W, H = src.size
                     mask = Image.new("L", src.size, 0)
                     from PIL import ImageDraw
-                    W, H = src.size
-                    draw = ImageDraw.Draw(mask)
-                    draw.rectangle([W//4, H//4, 3*W//4, 3*H//4], fill=255)
+                    ImageDraw.Draw(mask).rectangle(
+                        [W // 4, H // 4, 3 * W // 4, 3 * H // 4], fill=255
+                    )
                     sample["mask"] = mask
 
                 samples.append(sample)
 
-            logger.info(f"COCOEE: loaded {len(samples)} samples dari {gt_dir}")
+            logger.info(f"COCOEE: loaded {len(samples)} samples")
             return samples
 
-        # ── Fallback: format annotations.json ─────────────────────────────────
+        # Fallback: annotations.json
         ann_file = self.data_root / "annotations.json"
         if not ann_file.exists():
-            logger.warning(f"COCOEE: tidak ditemukan GT folder maupun annotations.json")
-            logger.warning(f"  Dicari di: {self.data_root}")
-            logger.warning(f"  Pastikan dataset ada di path yang benar.")
+            logger.warning(f"COCOEE: tidak ditemukan folder gambar maupun annotations.json")
+            logger.warning(f"  Path yang dicari: {self.data_root}")
+            logger.warning(f"  Pastikan dataset ada dengan struktur:")
+            logger.warning(f"    images/  masks/  references/  (tanpa annotations.json)")
             return []
 
         with open(ann_file) as f:
@@ -472,10 +490,20 @@ def main():
 
     all_results = {}
     for ds_name in datasets_to_eval:
-        # Print download instructions if data not found
-        data_path = Path(args.data_root) / ds_name
-        if not data_path.exists():
-            logger.warning(f"\nData not found: {data_path}")
+        # Cari path dataset — coba berbagai kemungkinan:
+        # 1. data_root/ds_name  (lowercase, e.g. data/cocoee)
+        # 2. data_root/DS_NAME  (uppercase, e.g. data/COCOEE)
+        # 3. data_root sendiri  (kalau user langsung tunjuk ke folder dataset)
+        candidates = [
+            Path(args.data_root) / ds_name,
+            Path(args.data_root) / ds_name.upper(),
+            Path(args.data_root),
+        ]
+        data_path = next((p for p in candidates if p.exists()), None)
+
+        if data_path is None:
+            logger.warning(f"\nData not found untuk dataset '{ds_name}'.")
+            logger.warning(f"  Dicari di: {[str(c) for c in candidates]}")
             logger.warning(DOWNLOAD_INSTRUCTIONS.get(ds_name, ""))
             continue
 
