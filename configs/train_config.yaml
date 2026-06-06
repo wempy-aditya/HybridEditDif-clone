@@ -1,0 +1,55 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# HybridEditDif — Training Config (OpenImages — Default)
+# ══════════════════════════════════════════════════════════════════════════════
+
+model:
+  sd_model_path: "runwayml/stable-diffusion-v1-5"
+  ddca_layers: 16
+  image_size: 512
+  clip_model: "ViT-H-14"
+  text_model: "ViT-g-14"
+
+dataset:
+  type: "openimages"            # openimages | coco | magicbrush | mixed
+  data_root: "./data"
+  image_size: 512
+  max_samples: null             # null = semua gambar yang tersedia
+  val_ratio: 0.02
+
+  openimages:
+    split_dir: "openimages"
+    annotations_file: "annotations/annotations.json"
+
+training:
+  num_epochs: 30
+  batch_size: 4
+  gradient_accumulation_steps: 8   # effective batch = 4 × 8 = 32
+  learning_rate: 1.0e-4
+  lr_warmup_steps: 500
+  weight_decay: 1.0e-4
+  max_grad_norm: 1.0
+  num_workers: 4
+
+  # Condition dropout (paper Section 3.3)
+  image_dropout_prob: 0.05
+  text_dropout_prob: 0.05
+
+  # Loss weights
+  lambda1: 1.0   # text condition weight
+  lambda2: 1.0   # image condition weight
+
+  # Mixed precision
+  mixed_precision: "bf16"        # bf16 | fp16 | no
+
+  # Checkpointing
+  checkpoint_dir: "checkpoints/checkpoints"
+  save_every_n_steps: 2000
+  keep_last_n_checkpoints: 5
+  resume_from_checkpoint: null   # atau "latest" / "checkpoints/checkpoint-10000"
+
+  # Logging
+  log_every_n_steps: 50
+  val_every_n_steps: 1000
+  use_wandb: false
+  project_name: "HybridEditDif"
+  run_name: "openimages-30ep"

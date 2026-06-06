@@ -43,12 +43,7 @@ from tqdm.auto import tqdm
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.models.hybrid_edit_dif import HybridEditDif
-from src.data.openimages_dataset import (
-    OpenImagesDownloader,
-    OpenImagesEditingDataset,
-    collate_fn,
-    get_dataloaders,
-)
+from src.data.dataset_factory import build_dataloaders_from_config
 from src.utils.metrics import compute_validation_metrics
 
 logging.basicConfig(
@@ -208,51 +203,15 @@ def train(config_path: str):
         lambda2=config.model.get("lambda2", 1.0),
     )
 
-    # ── Dataset ───────────────────────────────────────────────────────────────
+    # ── Dataset (Universal Factory) ───────────────────────────────────────────
     if accelerator.is_main_process:
-        logger.info("Loading dataset...")
+        ds_type = config.dataset.get("type", "openimages")
+        logger.info(f"Loading dataset (type='{ds_type}')...")
 
-    import json
+    train_loader, val_loader = build_dataloaders_from_config(config)
 
-    # Cek apakah ada JSON annotations dari scripts/download_openimages.py
-    # JSON lebih cepat dimuat dan sudah berformat yang benar
-    json_bbox_path = Path(config.data.data_root) / "annotations" / "train_bbox_annotations.json"
-
-    if json_bbox_path.exists():
-        logger.info(f"Loading bbox annotations from JSON: {json_bbox_path}")
-        with open(json_bbox_path) as f:
-            raw = json.load(f)
-        # JSON menyimpan list-of-list, konversi ke list-of-tuple
-        bbox_annotations = {
-            img_id: [tuple(b) for b in bboxes]
-            for img_id, bboxes in raw.items()
-        }
-        logger.info(f"Loaded {len(bbox_annotations):,} images with bbox annotations")
-    else:
-        # Fallback: download annotations CSV dari OpenImages (bisa lama, file ~5GB)
-        logger.info("JSON annotations tidak ditemukan, fallback ke CSV downloader...")
-        downloader = OpenImagesDownloader(config.data.data_root)
-        bbox_annotations = downloader.load_bbox_annotations(
-            split="train",
-            max_images=config.data.get("max_images", 200000),
-        )
-
-    # Load text annotations if available
-    text_annotations = None
-    text_ann_path = Path(config.data.data_root) / "annotations" / "text_annotations.json"
-    if text_ann_path.exists():
-        with open(text_ann_path) as f:
-            text_annotations = json.load(f)
-
-    train_loader, val_loader = get_dataloaders(
-        images_dir=os.path.join(config.data.data_root, "images", "train"),
-        bbox_annotations=bbox_annotations,
-        text_annotations=text_annotations,
-        image_size=config.data.get("image_size", 512),
-        batch_size=config.training.train_batch_size,
-        num_workers=config.data.get("num_workers", 8),
-        max_samples=config.data.get("max_samples", None),
-    )
+    if accelerator.is_main_process:
+        logger.info(f"Train: {len(train_loader.dataset)} | Val: {len(val_loader.dataset)} samples")
 
     # ── Optimizer ─────────────────────────────────────────────────────────────
     trainable_params = model.get_trainable_parameters()
@@ -264,9 +223,10 @@ def train(config_path: str):
         eps=1e-8,
     )
 
-    # ── LR Scheduler (cosine with warmup) ────────────────────────────────────
+    # ── LR Scheduler ─────────────────────────────────────────────────────────
     num_training_steps = config.training.num_epochs * len(train_loader)
-    num_warmup_steps   = config.training.get("warmup_steps", 500)
+    num_warmup_steps   = config.training.get("lr_warmup_steps",
+                         config.training.get("warmup_steps", 500))
 
     lr_scheduler = get_cosine_schedule_with_warmup(
         optimizer,
@@ -320,11 +280,12 @@ def train(config_path: str):
     if accelerator.is_main_process:
         logger.info("=" * 60)
         logger.info("Starting HybridEditDif training")
+        logger.info(f"  Dataset:     {config.dataset.get('type', 'openimages')}")
         logger.info(f"  Epochs:      {config.training.num_epochs}")
         logger.info(f"  Steps/epoch: {len(train_loader)}")
         logger.info(f"  Total steps: {num_training_steps}")
-        logger.info(f"  Batch size:  {config.training.train_batch_size} × {accelerator.num_processes} GPUs")
-        logger.info(f"  Effective:   {config.training.train_batch_size * accelerator.num_processes * config.training.gradient_accumulation_steps}")
+        logger.info(f"  Batch size:  {config.training.batch_size} × {accelerator.num_processes} GPUs")
+        logger.info(f"  Effective:   {config.training.batch_size * accelerator.num_processes * config.training.gradient_accumulation_steps}")
         logger.info("=" * 60)
 
     progress_bar = tqdm(
@@ -373,14 +334,16 @@ def train(config_path: str):
                         )
 
                 # ── Checkpoint ────────────────────────────────────────────────
-                if global_step % config.training.get("save_every", 2000) == 0:
+                if global_step % config.training.get("save_every_n_steps",
+                                   config.training.get("save_every", 2000)) == 0:
                     if accelerator.is_main_process:
                         save_path = ckpt_dir / f"checkpoint-{global_step}"
                         accelerator.save_state(str(save_path))
                         logger.info(f"Saved checkpoint: {save_path}")
 
                 # ── Validation ────────────────────────────────────────────────
-                if global_step % config.training.get("eval_every", 5000) == 0:
+                if global_step % config.training.get("val_every_n_steps",
+                                   config.training.get("eval_every", 5000)) == 0:
                     if accelerator.is_main_process:
                         logger.info("Running validation...")
                         # (inference + metrics computed in evaluate.py)

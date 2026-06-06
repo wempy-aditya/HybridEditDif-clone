@@ -1,0 +1,68 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# HybridEditDif — Training Config (Mixed: OpenImages + COCO + MagicBrush)
+# ══════════════════════════════════════════════════════════════════════════════
+# Ini adalah config terbaik untuk training yang paling general.
+# MagicBrush memberi real human instruction text,
+# COCO memberi segmentation mask berkualitas,
+# OpenImages memberi keragaman visual.
+
+model:
+  sd_model_path: "runwayml/stable-diffusion-v1-5"
+  ddca_layers: 16
+  image_size: 512
+  clip_model: "ViT-H-14"
+  text_model: "ViT-g-14"
+
+dataset:
+  type: "mixed"
+  data_root: "./data"
+  image_size: 512
+  max_samples: null
+  val_ratio: 0.02
+
+  openimages:
+    split_dir: "openimages"
+    annotations_file: "annotations/annotations.json"
+
+  coco:
+    split_dir: "coco"
+    min_bbox_area: 0.02
+    max_bbox_area: 0.60
+
+  magicbrush:
+    split_dir: "magicbrush"
+
+  mixed:
+    weights:
+      openimages: 0.5    # 50% OpenImages
+      coco: 0.3          # 30% COCO
+      magicbrush: 0.2    # 20% MagicBrush
+
+training:
+  num_epochs: 30
+  batch_size: 4
+  gradient_accumulation_steps: 8
+  learning_rate: 1.0e-4
+  lr_warmup_steps: 1000
+  weight_decay: 1.0e-4
+  max_grad_norm: 1.0
+  num_workers: 4
+
+  image_dropout_prob: 0.05
+  text_dropout_prob: 0.05
+
+  lambda1: 1.0
+  lambda2: 1.0
+
+  mixed_precision: "bf16"
+
+  checkpoint_dir: "checkpoints/mixed"
+  save_every_n_steps: 2000
+  keep_last_n_checkpoints: 5
+  resume_from_checkpoint: null
+
+  log_every_n_steps: 50
+  val_every_n_steps: 1000
+  use_wandb: false
+  project_name: "HybridEditDif"
+  run_name: "mixed-oi50-coco30-mb20-30ep"
