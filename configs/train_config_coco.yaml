@@ -13,7 +13,7 @@ dataset:
   type: "coco"
   data_root: "./data"
   image_size: 512
-  max_samples: null
+  max_samples: 1500           # null = semua (9053), angka = dibatasi sekian
   val_ratio: 0.02
 
   coco:
