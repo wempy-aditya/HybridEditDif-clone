@@ -87,15 +87,17 @@ def training_step(
     # Forward pass tetap pakai `model` (DDP) agar gradient sync benar.
     m = accelerator.unwrap_model(model)
 
-    source        = batch["source"].to(device, dtype=weight_dtype)        # [B,3,H,W]
-    masked_source = batch["masked_source"].to(device, dtype=weight_dtype) # [B,3,H,W]
-    reference     = batch["reference"].to(device, dtype=weight_dtype)     # [B,3,224,224]
-    mask          = batch["mask"].to(device, dtype=weight_dtype)          # [B,1,H,W]
-    text_tokens   = batch["text_tokens"].to(device)                       # [B,seq]
-    drop_image    = batch["drop_image"]
-    drop_text     = batch["drop_text"]
+    source        = batch["source"].to(device, dtype=weight_dtype)          # [B,3,H,W]
+    masked_source = batch["source_masked"].to(device, dtype=weight_dtype)   # [B,3,H,W]
+    reference     = batch["reference"].to(device, dtype=weight_dtype)       # [B,3,224,224]
+    mask          = batch["mask"].to(device, dtype=weight_dtype)            # [B,1,H,W]
+    text_tokens   = batch["text_tokens"].to(device)                         # [B,seq]
 
     B = source.shape[0]
+
+    # Condition dropout — paper Section 3.3 (generate di sini, tidak dari batch)
+    drop_image = torch.rand(B) < 0.05
+    drop_text  = torch.rand(B) < 0.05
 
     # ── Step 1-2: VAE encode ──────────────────────────────────────────────────
     with torch.no_grad():
