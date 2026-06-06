@@ -43,14 +43,13 @@ class COCOEditDataset(BaseEditDataset):
     """
     COCO 2017 dataset for inpainting training.
 
-    Masking strategy:
-      - Primary:  segmentation mask of a random instance (best quality)
-      - Fallback: bounding box of a random instance
-      - Last:     center crop
-
-    Reference:
-      - The masked region crop is used as reference (self-supervised).
-      - Augmented with ref_aug during training.
+    Auto-detects multiple folder structures:
+      A) Standard COCO:
+           annotations/instances_train2017.json + images/train2017/
+      B) FiftyOne export:
+           labels.json + data/
+      C) Flat:
+           labels.json (or *.json) + images/ (atau data/)
     """
 
     def __init__(
@@ -60,19 +59,17 @@ class COCOEditDataset(BaseEditDataset):
         image_size: int = 512,
         clip_image_size: int = 224,
         max_samples: Optional[int] = None,
-        min_bbox_area: float = 0.02,   # min fraction of image area
-        max_bbox_area: float = 0.60,   # max fraction of image area
+        min_bbox_area: float = 0.02,
+        max_bbox_area: float = 0.60,
         augment_reference: bool = True,
         seed: int = 42,
     ):
-        self.data_root      = Path(data_root)
-        self.min_bbox_area  = min_bbox_area
-        self.max_bbox_area  = max_bbox_area
+        self.data_root     = Path(data_root)
+        self.min_bbox_area = min_bbox_area
+        self.max_bbox_area = max_bbox_area
 
-        # Determine annotation file and image folder
-        ann_split = "train2017" if split == "train" else "val2017"
-        self.images_dir = self.data_root / "images" / ann_split
-        self.ann_file   = self.data_root / "annotations" / f"instances_{ann_split}.json"
+        # Auto-detect annotation file + images dir
+        self.ann_file, self.images_dir = self._detect_paths(split)
 
         super().__init__(
             split=split,
@@ -83,64 +80,133 @@ class COCOEditDataset(BaseEditDataset):
             seed=seed,
         )
 
-    def _load_samples(self) -> List[Dict]:
-        if not self.ann_file.exists():
-            raise FileNotFoundError(
-                f"COCO annotation not found: {self.ann_file}\n"
-                f"  Run: python scripts/download_coco.py --data_root {self.data_root}"
-            )
+    def _detect_paths(self, split: str):
+        """
+        Try multiple path conventions and return (ann_file, images_dir).
+        Priority:
+          1. Standard COCO (annotations/instances_train2017.json)
+          2. FiftyOne export (labels.json + data/)
+          3. Any .json in root + images/ or data/
+        """
+        root = self.data_root
+        ann_split = "train2017" if split == "train" else "val2017"
 
-        logger.info(f"Loading COCO annotations dari {self.ann_file}...")
+        # ── 1. Standard COCO format ──────────────────────────────────────────
+        std_ann = root / "annotations" / f"instances_{ann_split}.json"
+        std_img = root / "images" / ann_split
+        if std_ann.exists() and std_img.exists():
+            logger.info(f"COCO format: standard ({std_ann.name})")
+            return std_ann, std_img
+
+        # Also try without split suffix in images dir
+        std_img2 = root / "images"
+        if std_ann.exists() and std_img2.exists():
+            logger.info(f"COCO format: standard ann + flat images/")
+            return std_ann, std_img2
+
+        # ── 2. FiftyOne export format (labels.json + data/) ──────────────────
+        fo_ann = root / "labels.json"
+        fo_img = root / "data"
+        if fo_ann.exists() and fo_img.exists() and any(fo_img.iterdir()):
+            logger.info(f"COCO format: FiftyOne export (labels.json + data/)")
+            return fo_ann, fo_img
+
+        # ── 3. Any JSON file + images/data folder ────────────────────────────
+        img_candidates = [root / "data", root / "images", root / f"images/{ann_split}"]
+        json_candidates = (
+            list(root.glob("*.json")) +
+            list((root / "annotations").glob("*.json") if (root / "annotations").exists() else [])
+        )
+
+        img_dir = next((d for d in img_candidates if d.exists() and d.is_dir()), None)
+        ann_file = next((f for f in json_candidates if f.exists()), None)
+
+        if ann_file and img_dir:
+            logger.info(f"COCO format: auto-detected ({ann_file.name} + {img_dir.name}/)")
+            return ann_file, img_dir
+
+        # ── Not found — raise informative error ──────────────────────────────
+        raise FileNotFoundError(
+            f"\nCOCO data tidak ditemukan di: {root}\n"
+            f"  Struktur yang ada:\n"
+            f"    {list(root.iterdir()) if root.exists() else '(folder tidak ada)'}\n\n"
+            f"  Solusi:\n"
+            f"    python scripts/download_coco.py --data_root {root} --n_samples 5000\n\n"
+            f"  Atau jika FiftyOne sudah download:\n"
+            f"    Cek apakah ada labels.json dan folder data/ di {root}"
+        )
+
+    def _load_samples(self) -> List[Dict]:
+        logger.info(f"Loading COCO annotations dari {self.ann_file.name}...")
         with open(self.ann_file) as f:
             coco_data = json.load(f)
 
-        # Build category id → name map
-        cat_map = {c["id"]: c["name"] for c in coco_data.get("categories", [])}
+        # ── Validate JSON structure ───────────────────────────────────────────
+        if "images" not in coco_data or "annotations" not in coco_data:
+            raise ValueError(
+                f"File {self.ann_file.name} bukan format COCO yang valid.\n"
+                f"  Butuh keys: 'images', 'annotations', 'categories'\n"
+                f"  Keys yang ada: {list(coco_data.keys())}"
+            )
 
-        # Build image id → image info map
+        # Build lookup maps
+        cat_map = {c["id"]: c["name"] for c in coco_data.get("categories", [])}
         img_map = {img["id"]: img for img in coco_data["images"]}
 
         # Group annotations by image
         ann_by_img: Dict[int, List] = {}
         for ann in coco_data["annotations"]:
-            img_id = ann["image_id"]
-            if img_id not in ann_by_img:
-                ann_by_img[img_id] = []
-            ann_by_img[img_id].append(ann)
+            iid = ann["image_id"]
+            ann_by_img.setdefault(iid, []).append(ann)
 
         samples = []
+        missing = 0
         for img_id, anns in ann_by_img.items():
             img_info = img_map.get(img_id)
             if img_info is None:
                 continue
 
-            img_path = self.images_dir / img_info["file_name"]
+            # FiftyOne stores just the filename, standard COCO may store full path
+            file_name = Path(img_info["file_name"]).name
+            img_path  = self.images_dir / file_name
+
             if not img_path.exists():
+                missing += 1
                 continue
 
-            W, H = img_info["width"], img_info["height"]
+            W = img_info.get("width",  0)
+            H = img_info.get("height", 0)
 
-            # Filter annotations by area
-            valid_anns = []
-            for ann in anns:
-                area_frac = ann.get("area", 0) / (W * H)
-                if self.min_bbox_area <= area_frac <= self.max_bbox_area:
-                    valid_anns.append(ann)
+            # If dimensions not in annotation, read from file
+            if W == 0 or H == 0:
+                try:
+                    from PIL import Image as _Image
+                    W, H = _Image.open(img_path).size
+                except Exception:
+                    continue
 
+            # Filter by area
+            valid_anns = [
+                ann for ann in anns
+                if self.min_bbox_area <= ann.get("area", 0) / (W * H) <= self.max_bbox_area
+            ]
             if not valid_anns:
                 continue
 
             category_name = cat_map.get(valid_anns[0]["category_id"], "object")
             samples.append({
-                "img_id":    img_id,
-                "path":      img_path,
-                "anns":      valid_anns,
+                "img_id":   img_id,
+                "path":     img_path,
+                "anns":     valid_anns,
                 "W": W, "H": H,
-                "category":  category_name,
+                "category": category_name,
             })
 
+        if missing > 0:
+            logger.warning(f"COCO: {missing} images tidak ditemukan di {self.images_dir}")
         logger.info(f"COCO ({self.split}): {len(samples)} images dengan valid instances")
         return samples
+
 
     def _get_raw(self, idx: int):
         sample = self.samples[idx]
