@@ -21,6 +21,8 @@ dataset:
   magicbrush:
     split_dir: "magicbrush"
 
+output_dir: "checkpoints/magicbrush"
+
 training:
   num_epochs: 30
   batch_size: 4

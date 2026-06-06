@@ -38,6 +38,8 @@ dataset:
       coco: 0.3          # 30% COCO
       magicbrush: 0.2    # 20% MagicBrush
 
+output_dir: "checkpoints/mixed"
+
 training:
   num_epochs: 30
   batch_size: 4

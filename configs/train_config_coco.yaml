@@ -21,6 +21,8 @@ dataset:
     min_bbox_area: 0.02
     max_bbox_area: 0.60
 
+output_dir: "checkpoints/coco"
+
 training:
   num_epochs: 30
   batch_size: 4

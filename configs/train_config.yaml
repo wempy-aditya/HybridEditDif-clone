@@ -10,15 +10,17 @@ model:
   text_model: "ViT-g-14"
 
 dataset:
-  type: "openimages"            # openimages | coco | magicbrush | mixed
+  type: "openimages"
   data_root: "./data"
   image_size: 512
-  max_samples: null             # null = semua gambar yang tersedia
+  max_samples: null
   val_ratio: 0.02
 
   openimages:
     split_dir: "openimages"
     annotations_file: "annotations/annotations.json"
+
+output_dir: "checkpoints/openimages"
 
 training:
   num_epochs: 30

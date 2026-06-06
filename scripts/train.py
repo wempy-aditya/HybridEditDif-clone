@@ -262,8 +262,11 @@ def train(config_path: str):
     # ── Resume from checkpoint ────────────────────────────────────────────────
     start_epoch = 0
     global_step = 0
-    ckpt_dir = Path(config.output_dir) / "checkpoints"
-    ckpt_dir.mkdir(exist_ok=True)
+    ckpt_dir = Path(
+        config.training.get("checkpoint_dir",
+                            str(Path(config.output_dir) / "checkpoints"))
+    )
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     if config.training.get("resume_from_checkpoint"):
         ckpt_path = config.training.resume_from_checkpoint
