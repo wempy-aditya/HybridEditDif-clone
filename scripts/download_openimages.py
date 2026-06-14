@@ -13,6 +13,10 @@ Usage:
     # Download 50k gambar (recommended untuk mulai)
     python scripts/download_openimages.py --n_samples 50000
 
+    # Pakai cache FiftyOne dari HDD (tanpa download ulang)
+    python scripts/download_openimages.py --n_samples 50000 \\
+        --fiftyone_dir /mnt/storage/fiftyone
+
     # Download lebih sedikit untuk testing
     python scripts/download_openimages.py --n_samples 1000 --split train
 
@@ -48,11 +52,25 @@ def download_via_fiftyone(
     data_root: str,
     n_samples: int,
     split: str = "train",
+    fiftyone_dir: str = None,
 ):
     """
     Download menggunakan FiftyOne (paling mudah).
     FiftyOne otomatis handle download + bbox annotations.
+
+    fiftyone_dir: override lokasi FiftyOne database/cache.
+                  Gunakan ini jika cache sudah dipindah ke HDD.
     """
+    # ── Set FiftyOne dir SEBELUM import fo ─────────────────────────────────
+    # FiftyOne membaca env var saat pertama kali diimport, jadi harus diset dulu.
+    if fiftyone_dir:
+        fo_dir = str(Path(fiftyone_dir).resolve())
+        os.environ["FIFTYONE_DATABASE_DIR"]    = fo_dir
+        os.environ["FIFTYONE_DATASET_ZOO_DIR"] = fo_dir
+        logger.info(f"FiftyOne dir → {fo_dir}")
+    elif "FIFTYONE_DATABASE_DIR" in os.environ:
+        logger.info(f"FiftyOne dir (env) → {os.environ['FIFTYONE_DATABASE_DIR']}")
+
     try:
         import fiftyone as fo
         import fiftyone.zoo as foz
@@ -218,6 +236,10 @@ def main():
                         default="train", help="Split dataset (default: train)")
     parser.add_argument("--method", choices=["fiftyone", "csv"],
                         default="fiftyone", help="Metode download (default: fiftyone)")
+    parser.add_argument("--fiftyone_dir", default=None,
+                        help="Override lokasi FiftyOne database/cache. "
+                             "Gunakan jika cache sudah dipindah ke HDD, "
+                             "contoh: --fiftyone_dir /mnt/storage/fiftyone")
     args = parser.parse_args()
 
     data_root = Path(args.data_root).resolve()
@@ -236,7 +258,10 @@ def main():
     logger.info("=" * 60)
 
     if args.method == "fiftyone":
-        success = download_via_fiftyone(str(data_root), args.n_samples, args.split)
+        success = download_via_fiftyone(
+            str(data_root), args.n_samples, args.split,
+            fiftyone_dir=args.fiftyone_dir,
+        )
         if not success:
             logger.info("Fallback ke metode CSV...")
             download_via_csv(str(data_root), args.n_samples, args.split)
