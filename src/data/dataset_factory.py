@@ -39,8 +39,9 @@ from typing import Dict, Optional, Tuple
 import torch
 from torch.utils.data import Dataset, DataLoader, ConcatDataset, WeightedRandomSampler
 
-from .base_dataset import collate_fn
+from .base_dataset import collate_fn as base_collate_fn
 from .openimages_dataset import OpenImagesEditingDataset
+from .openimages_dataset import collate_fn as openimages_collate_fn
 from .coco_dataset import COCOEditDataset
 from .magicbrush_dataset import MagicBrushEditDataset
 
@@ -51,11 +52,75 @@ logger = logging.getLogger(__name__)
 # Registry
 # ══════════════════════════════════════════════════════════════════════════════
 
+# openimages tidak masuk registry karena punya signature berbeda
 DATASET_REGISTRY = {
-    "openimages": OpenImagesEditingDataset,
     "coco":       COCOEditDataset,
     "magicbrush": MagicBrushEditDataset,
 }
+
+
+def build_openimages_dataset(
+    data_root: str,
+    split: str = "train",
+    image_size: int = 512,
+    max_samples: Optional[int] = None,
+    annotations_file: str = None,
+    **kwargs,
+) -> Dataset:
+    """
+    Builder khusus OpenImages — load annotations JSON dulu,
+    lalu pass ke OpenImagesEditingDataset dengan signature yang benar.
+    """
+    import json
+    root = Path(data_root)
+
+    # Cari bbox annotations
+    ann_candidates = [
+        root / "annotations" / f"{split}_bbox_annotations.json",
+        root / "annotations" / "train_bbox_annotations.json",  # fallback
+    ]
+    if annotations_file:
+        ann_candidates.insert(0, root / annotations_file)
+
+    bbox_file = next((p for p in ann_candidates if p.exists()), None)
+    if bbox_file is None:
+        raise FileNotFoundError(
+            f"OpenImages bbox annotations tidak ditemukan di {root}/annotations/\n"
+            f"  Jalankan dulu: python scripts/download_openimages.py "
+            f"--data_root {root}"
+        )
+
+    logger.info(f"Loading bbox annotations: {bbox_file.name}")
+    with open(bbox_file) as f:
+        raw = json.load(f)
+    bbox_annotations = {
+        img_id: [tuple(b) for b in bboxes]
+        for img_id, bboxes in raw.items()
+    }
+    logger.info(f"  {len(bbox_annotations):,} images dengan bbox annotations")
+
+    # Cari text annotations (optional)
+    text_file = root / "annotations" / "text_annotations.json"
+    text_annotations = None
+    if text_file.exists():
+        with open(text_file) as f:
+            text_annotations = json.load(f)
+        logger.info(f"  Text annotations: {len(text_annotations):,} entries")
+
+    images_dir = root / "images" / split
+    if not images_dir.exists():
+        # Fallback: coba tanpa split subfolder
+        images_dir = root / "images"
+
+    logger.info(f"Building OpenImages dataset | split={split} | root={images_dir}")
+    return OpenImagesEditingDataset(
+        images_dir=str(images_dir),
+        bbox_annotations=bbox_annotations,
+        text_annotations=text_annotations,
+        image_size=image_size,
+        split=split,
+        max_samples=max_samples,
+    )
 
 
 def build_single_dataset(
@@ -67,10 +132,20 @@ def build_single_dataset(
     extra_kwargs: Optional[Dict] = None,
 ) -> Dataset:
     """Build a single dataset by type name."""
+    # OpenImages punya signature berbeda — dispatch ke builder khusus
+    if dataset_type == "openimages":
+        return build_openimages_dataset(
+            data_root=data_root,
+            split=split,
+            image_size=image_size,
+            max_samples=max_samples,
+            **(extra_kwargs or {}),
+        )
+
     if dataset_type not in DATASET_REGISTRY:
         raise ValueError(
             f"Unknown dataset type: '{dataset_type}'. "
-            f"Available: {list(DATASET_REGISTRY.keys())}"
+            f"Available: ['openimages'] + {list(DATASET_REGISTRY.keys())}"
         )
 
     cls = DATASET_REGISTRY[dataset_type]
@@ -213,13 +288,16 @@ def build_dataloaders_from_config(cfg) -> Tuple[DataLoader, DataLoader]:
 
     logger.info(f"Train: {len(train_ds)} | Val: {len(val_ds)} samples")
 
+    # Pilih collate_fn: OpenImages punya format batch sendiri (masked_source, drop_image, dll)
+    collate = openimages_collate_fn if ds_type == "openimages" else base_collate_fn
+
     train_loader = DataLoader(
         train_ds,
         batch_size=batch_size,
         sampler=sampler,
         shuffle=(sampler is None),
         num_workers=num_workers,
-        collate_fn=collate_fn,
+        collate_fn=collate,
         pin_memory=True,
         drop_last=True,
     )
@@ -228,7 +306,7 @@ def build_dataloaders_from_config(cfg) -> Tuple[DataLoader, DataLoader]:
         batch_size=max(1, batch_size // 2),
         shuffle=False,
         num_workers=min(2, num_workers),
-        collate_fn=collate_fn,
+        collate_fn=collate,
         pin_memory=True,
     )
 
