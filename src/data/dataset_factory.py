@@ -291,6 +291,10 @@ def build_dataloaders_from_config(cfg) -> Tuple[DataLoader, DataLoader]:
     # Pilih collate_fn: OpenImages punya format batch sendiri (masked_source, drop_image, dll)
     collate = openimages_collate_fn if ds_type == "openimages" else base_collate_fn
 
+    prefetch_factor = cfg.training.get("prefetch_factor", 2)
+    # persistent_workers: worker process tetap hidup antar epoch → hemat spawn overhead
+    persistent = num_workers > 0
+
     train_loader = DataLoader(
         train_ds,
         batch_size=batch_size,
@@ -300,6 +304,8 @@ def build_dataloaders_from_config(cfg) -> Tuple[DataLoader, DataLoader]:
         collate_fn=collate,
         pin_memory=True,
         drop_last=True,
+        persistent_workers=persistent,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
     )
     val_loader = DataLoader(
         val_ds,
@@ -308,6 +314,8 @@ def build_dataloaders_from_config(cfg) -> Tuple[DataLoader, DataLoader]:
         num_workers=min(2, num_workers),
         collate_fn=collate,
         pin_memory=True,
+        persistent_workers=(min(2, num_workers) > 0),
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
     )
 
     return train_loader, val_loader

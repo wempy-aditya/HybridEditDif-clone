@@ -1,6 +1,18 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# HybridEditDif — Training Config (OpenImages — Default)
+# HybridEditDif — Training Config (OpenImages — Paper Replication)
 # ══════════════════════════════════════════════════════════════════════════════
+# Target: replikasi paper dengan 1.9M images, 1 epoch (sesuai paper style)
+#
+# Strategi:
+#   - Full dataset 1.9M images, num_epochs=1
+#   - Pakai 2 GPU (DDP): RTX 4080 (16GB) + RTX PRO 4000 (24GB)
+#   - Effective batch = 4 per GPU × 2 GPU × grad_accum 8 = 64
+#   - Estimasi: ~3 hari (vs 608 hari sebelumnya)
+#
+# Command:
+#   CUDA_VISIBLE_DEVICES=0,1 accelerate launch --multi_gpu \
+#     --mixed_precision bf16 --num_processes 2 \
+#     scripts/train.py --config configs/train_config.yaml
 
 model:
   sd_model_path: "runwayml/stable-diffusion-v1-5"
@@ -13,45 +25,47 @@ dataset:
   type: "openimages"
   data_root: "./data"
   image_size: 512
-  max_samples: null
-  val_ratio: 0.02
+  max_samples: null          # null = semua 1.9M (sesuai paper)
+  val_ratio: 0.01            # 1% val = ~17k samples
 
   openimages:
     split_dir: "openimages"
     annotations_file: "annotations/annotations.json"
 
-output_dir: "checkpoints/openimages"
+output_dir: "checkpoints/openimages_paper"
 
 training:
-  num_epochs: 30
-  batch_size: 4
-  gradient_accumulation_steps: 8   # effective batch = 4 × 8 = 32
+  num_epochs: 1              # Paper style: 1 full epoch pada dataset besar
+                             # Bisa di-resume ke 2 jika hasil belum cukup baik
+  batch_size: 4              # Per GPU (aman untuk RTX 4080 16GB + gradient checkpointing)
+  gradient_accumulation_steps: 8   # effective = 4 × 2GPU × 8 = 64
   learning_rate: 1.0e-4
-  lr_warmup_steps: 500
+  lr_warmup_steps: 1000      # Lebih banyak warmup untuk dataset besar
   weight_decay: 1.0e-4
   max_grad_norm: 1.0
-  num_workers: 4
+  num_workers: 8             # 8 workers per GPU process
+  prefetch_factor: 2
 
   # Condition dropout (paper Section 3.3)
   image_dropout_prob: 0.05
   text_dropout_prob: 0.05
 
   # Loss weights
-  lambda1: 1.0   # text condition weight
-  lambda2: 1.0   # image condition weight
+  lambda1: 1.0
+  lambda2: 1.0
 
   # Mixed precision
-  mixed_precision: "bf16"        # bf16 | fp16 | no
+  mixed_precision: "bf16"
 
-  # Checkpointing
-  checkpoint_dir: "checkpoints/checkpoints"
-  save_every_n_steps: 2000
-  keep_last_n_checkpoints: 5
-  resume_from_checkpoint: null   # atau "latest" / "checkpoints/checkpoint-10000"
+  # Checkpointing — lebih sering karena training lama
+  checkpoint_dir: "checkpoints/openimages_paper/checkpoints"
+  save_every_n_steps: 5000
+  keep_last_n_checkpoints: 3
+  resume_from_checkpoint: null   # set ke "latest" jika mau resume
 
   # Logging
-  log_every_n_steps: 50
-  val_every_n_steps: 1000
+  log_every_n_steps: 100
+  val_every_n_steps: 5000
   use_wandb: false
   project_name: "HybridEditDif"
-  run_name: "openimages-30ep"
+  run_name: "openimages-1.9M-1ep-paper-replication"
