@@ -35,7 +35,7 @@ import torch.nn.functional as F
 import numpy as np
 from torch.utils.data import DataLoader
 from accelerate import Accelerator
-from accelerate.utils import set_seed, ProjectConfiguration
+from accelerate.utils import set_seed, ProjectConfiguration, DistributedDataParallelKwargs
 from diffusers.optimization import get_cosine_schedule_with_warmup
 import wandb
 from omegaconf import OmegaConf
@@ -181,11 +181,15 @@ def train(config_path: str):
         project_dir=config.output_dir,
         logging_dir=os.path.join(config.output_dir, "logs"),
     )
+    # find_unused_parameters=True diperlukan karena model punya frozen components
+    # (VAE, CLIP encoders, SD text encoder) yang tidak dapat gradient saat DDP.
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     accelerator = Accelerator(
         gradient_accumulation_steps=config.training.gradient_accumulation_steps,
         mixed_precision=config.training.mixed_precision,
         log_with="wandb" if config.get("use_wandb", False) else None,
         project_config=project_config,
+        kwargs_handlers=[ddp_kwargs],
     )
 
     set_seed(config.training.get("seed", 42))
