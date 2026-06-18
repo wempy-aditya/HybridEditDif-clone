@@ -61,7 +61,7 @@ training:
   checkpoint_dir: "checkpoints/openimages_paper/checkpoints"
   save_every_n_steps: 5000
   keep_last_n_checkpoints: 3
-  resume_from_checkpoint: null   # set ke "latest" jika mau resume
+  resume_from_checkpoint: "latest"  # lanjut dari checkpoint-15000
 
   # Logging
   log_every_n_steps: 100
