@@ -383,6 +383,12 @@ def run_evaluation(
     masks            = []
     texts            = []
 
+    # Folder tambahan: reference + visualization grid
+    ref_dir = output_path / "references"
+    vis_dir = output_path / "visualization"
+    ref_dir.mkdir(parents=True, exist_ok=True)
+    vis_dir.mkdir(parents=True, exist_ok=True)
+
     logger.info(f"\nRunning inference on {len(samples)} {dataset_name} samples...")
 
     for i, sample in enumerate(tqdm(samples, desc=f"Evaluating {dataset_name}")):
@@ -400,8 +406,41 @@ def run_evaluation(
             w2=w2,
         )
 
-        output.save(generated_dir / f"{i:05d}.jpg", quality=95)
-        src.save(real_dir / f"{i:05d}.jpg", quality=95)
+        # Simpan dengan nama sequential agar selaras
+        fname = f"{i:05d}.jpg"
+        output.save(generated_dir / fname, quality=95)
+        src.save(real_dir    / fname, quality=95)
+
+        # Simpan reference dengan nama yang SAMA agar mudah diverifikasi
+        if ref:
+            ref.save(ref_dir / fname, quality=95)
+
+        # Buat visualization grid: [Source | Mask | Reference | Generated]
+        # Semua di-resize ke ukuran yang sama untuk display
+        VIS_SIZE = 256
+        def _thumb(img, mode="RGB"):
+            return img.convert(mode).resize((VIS_SIZE, VIS_SIZE), Image.LANCZOS)
+
+        panels = [_thumb(src), _thumb(mask, "RGB")]
+        if ref:
+            panels.append(_thumb(ref))
+        else:
+            panels.append(Image.new("RGB", (VIS_SIZE, VIS_SIZE), (128, 128, 128)))
+        panels.append(_thumb(output))
+
+        grid = Image.new("RGB", (VIS_SIZE * len(panels), VIS_SIZE))
+        for j, panel in enumerate(panels):
+            grid.paste(panel, (j * VIS_SIZE, 0))
+
+        # Label: tulis nama file sumber di sudut grid
+        try:
+            from PIL import ImageDraw
+            draw = ImageDraw.Draw(grid)
+            label = f"#{i:05d} | src | mask | ref | gen"
+            draw.text((4, 4), label, fill=(255, 255, 0))
+        except Exception:
+            pass
+        grid.save(vis_dir / f"{i:05d}.jpg", quality=90)
 
         generated_images.append(output)
         source_images.append(src)
@@ -409,6 +448,13 @@ def run_evaluation(
             reference_images.append(ref)
         masks.append(mask)
         texts.append(text)
+
+    logger.info(f"\n✓ Output tersimpan di: {output_path}")
+    logger.info(f"  generated/  : {len(generated_images)} hasil generated")
+    logger.info(f"  real/       : source images (aligned dengan generated)")
+    logger.info(f"  references/ : reference images (aligned, nama sama dengan generated)")
+    logger.info(f"  visualization/ : grid [source|mask|ref|generated] per sample")
+    logger.info(f"  → Verifikasi pairing: bandingkan 00000.jpg di ketiga folder")
 
     # Compute metrics
     evaluator = HybridEditDifEvaluator(device=str(device))

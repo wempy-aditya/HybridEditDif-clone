@@ -285,13 +285,27 @@ def train(config_path: str):
     if config.training.get("resume_from_checkpoint"):
         ckpt_path = config.training.resume_from_checkpoint
         if ckpt_path == "latest":
-            ckpts = sorted(ckpt_dir.glob("checkpoint-*"))
+            # Sort berdasarkan step number (bukan lexicographic) agar benar
+            ckpts = sorted(
+                ckpt_dir.glob("checkpoint-*"),
+                key=lambda p: int(p.name.split("-")[-1])
+            )
             ckpt_path = str(ckpts[-1]) if ckpts else None
+
         if ckpt_path and Path(ckpt_path).exists():
-            logger.info(f"Resuming from: {ckpt_path}")
-            accelerator.load_state(ckpt_path)
+            if accelerator.is_main_process:
+                logger.info(f"Resuming from: {ckpt_path}")
+
+            # Load ke CPU dulu untuk menghindari OOM pada GPU kecil (16GB).
+            # Accelerate akan memindahkan tensor ke device yang benar setelahnya.
+            accelerator.load_state(ckpt_path, map_location="cpu")
+
             global_step = int(Path(ckpt_path).name.split("-")[-1])
             start_epoch = global_step // len(train_loader)
+            if accelerator.is_main_process:
+                logger.info(f"Resumed at step={global_step}, epoch={start_epoch+1}")
+        elif ckpt_path:
+            logger.warning(f"Checkpoint tidak ditemukan: {ckpt_path}. Mulai dari awal.")
 
     # ── Training loop ─────────────────────────────────────────────────────────
     if accelerator.is_main_process:
